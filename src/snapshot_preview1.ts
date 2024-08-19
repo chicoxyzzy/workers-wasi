@@ -214,6 +214,14 @@ export enum Clock {
   THREAD_CPUTIME_ID = 3,
 }
 
+export const SUBSCRIPTION_SIZE = 6
+
+export enum EventType {
+  ClockEvent = 0,
+  FDReadEvent = 1,
+  FDWriteEvent = 2,
+}
+
 export const iovViews = (
   view: DataView,
   iovs_ptr: number,

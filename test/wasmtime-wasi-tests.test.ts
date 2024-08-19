@@ -10,7 +10,7 @@ const todos = new Set([
   'wasmtime/path_exists.wasm',
   'wasmtime/path_link.wasm',
   'wasmtime/path_symlink_trailing_slashes.wasm',
-  'wasmtime/poll_oneoff_files.wasm',
+  // 'wasmtime/poll_oneoff_files.wasm',
   'wasmtime/poll_oneoff_stdio.wasm',
   'wasmtime/readlink.wasm',
   'wasmtime/symlink_create.wasm',

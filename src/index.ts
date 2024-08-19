@@ -9,6 +9,56 @@ import {
   fromWritableStream,
 } from './streams'
 
+type Event = { // size 32
+  userData: bigint      // 8 bytes
+  error: wasi.Result    // 2 bytes
+  type: wasi.EventType  // 6 bytes
+  fd_readwrite: bigint  // 16 bytes
+}
+
+type SubscriptionClock = { // size 32
+  id: wasi.Clock        // 8 bytes (4 + 4 alignment)
+  timeout: bigint   // 8 bytes
+  precision: bigint // 8 bytes
+  flags: bigint     // 8 bytes
+}
+
+type SubscriptionU = {
+  tag: wasi.EventType,
+  u: any // FIXME
+}
+
+type Subscription = {
+  userData: bigint // 1 byte
+  u: SubscriptionU // 40 byte
+}
+
+function getSubscriptionClock(view: DataView, address: number): SubscriptionClock {
+  const id = view.getUint32(address)
+  const timeout = view.getBigUint64(address + 8, true)
+  const precision = view.getBigUint64(address + 16, true)
+  const flags = view.getBigUint64(address + 24, true)
+  return {
+    id,
+    timeout,
+    precision,
+    flags
+  }
+}
+
+function getSubscription(view: DataView, address: number): Subscription {
+  const userData = view.getBigUint64(address, true)
+  const tag = view.getUint8(address + 8)
+  const u = view.getBigUint64(address + 16, true)
+  return {
+    userData,
+    u: {
+      tag,
+      u
+    }
+  }
+}
+
 export type Environment = { [key: string]: string }
 
 /**
@@ -97,7 +147,12 @@ export interface WASIOptions {
    * @internal
    *
    */
-  fs?: _FS
+  fs?: _FS,
+
+  /**
+   * Worker context
+   */
+  ctx?: any
 }
 
 /**
@@ -114,6 +169,7 @@ export class WASI {
   #memfs: MemFS
   #state: any = new Asyncify()
   #asyncify: boolean
+  #ctx: any
 
   constructor(options?: WASIOptions) {
     this.#args = options?.args ?? []
@@ -132,6 +188,7 @@ export class WASI {
       fromWritableStream(options?.stderr, this.#asyncify),
     ]
     this.#memfs = new MemFS(this.#preopens, options?.fs ?? {})
+    this.#ctx = options?.ctx
   }
 
   /**
@@ -386,9 +443,70 @@ export class WASI {
     out_ptr: number,
     nsubscriptions: number,
     retptr0: number
-  ): number {
-    return wasi.Result.ENOSYS
+  ): Promise<number> | number {
+    if (nsubscriptions === 0) {
+      return wasi.Result.EINVAL
+    }
+
+    const view = this.#view()
+    let readyCount = 0
+
+    const timeoutPromises = [] as Promise<void>[]
+
+    for (let i = 0; i < nsubscriptions; i++) {
+      const subscription = getSubscription(view, in_ptr + i * wasi.SUBSCRIPTION_SIZE)
+
+      let event: Event
+
+      switch (subscription.u.tag) {
+        case wasi.EventType.ClockEvent: {
+          event = {
+            userData: subscription.userData,
+            error: wasi.Result.SUCCESS,
+            type: wasi.EventType.ClockEvent,
+            fd_readwrite: 0n, // ignore for the clock event
+          }
+          const clock = getSubscriptionClock(view, in_ptr + i * wasi.SUBSCRIPTION_SIZE + 8)
+
+          switch (clock.id) {
+            case wasi.Clock.REALTIME:
+            case wasi.Clock.MONOTONIC: {
+              const timeout = Number(clock.timeout) * 1e-6 // convert to milliseconds
+              timeoutPromises.push(new Promise(resolve => setTimeout(resolve, timeout)))
+              break
+            }
+            default:
+              return wasi.Result.EINVAL // Unsupported clock type
+          }
+
+          break
+        }
+        default:
+          return wasi.Result.EINVAL // Unsupported event type
+      }
+
+      // Write the event to the output array
+      const eventOffset = out_ptr + i * 32 // Assuming each event occupies 32 bytes
+
+      readyCount += 1
+
+      // if (readyCount > 0) {
+        view.setBigUint64(eventOffset + 0, event.userData, true) // userData at offset 0
+        view.setUint16(eventOffset + 8, event.error, true) // error at offset 8
+        view.setUint16(eventOffset + 10, event.type, true) // type at offset 10
+        // Skip 2 bytes for padding to align the next field on an 8-byte boundary
+        view.setBigUint64(eventOffset + 16, event.fd_readwrite, true) // variant at offset 16
+      // }
+    }
+
+    this.#ctx.waitUntil(Promise.race(timeoutPromises))
+
+    // Store the number of ready events
+    view.setUint32(retptr0, readyCount, true)
+
+    return wasi.Result.SUCCESS
   }
+
 
   #proc_exit(code: number) {
     throw new ProcessExit(code)

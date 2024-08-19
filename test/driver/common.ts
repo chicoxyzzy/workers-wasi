@@ -9,6 +9,7 @@ export interface ExecOptions {
   preopens: string[]
   returnOnExit: boolean
   stdin?: string
+  ctx?: any
 }
 
 export interface ExecResult {
@@ -20,7 +21,8 @@ export interface ExecResult {
 export const exec = async (
   options: ExecOptions,
   wasm: WebAssembly.Module,
-  body?: ReadableStream<Uint8Array>
+  body?: ReadableStream<Uint8Array>,
+  ctx?: any
 ): Promise<ExecResult> => {
   let TransformStream = global.TransformStream
 
@@ -45,6 +47,7 @@ export const exec = async (
     stdin: body,
     stdout: stdout.writable,
     streamStdio: options.asyncify,
+    ctx,
   })
   const instance = new WebAssembly.Instance(wasm, {
     wasi_snapshot_preview1: wasi.wasiImport,
